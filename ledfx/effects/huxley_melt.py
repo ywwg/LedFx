@@ -1,3 +1,4 @@
+import logging
 import queue
 import time
 
@@ -8,6 +9,8 @@ from ledfx.effects.audio import AudioReactiveEffect
 from ledfx.effects.hsv_effect import HSVEffect
 from ledfx.effects import smooth
 from ledfx.utils import empty_queue
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HuxleyMelt(AudioReactiveEffect, HSVEffect):
@@ -35,24 +38,34 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
             vol.Optional(
                 "strobe_decay_rate",
                 description="Percussive strobe decay rate. Higher -> decays faster.",
-                default=0.5,
+                default=0.25,
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
             vol.Optional(
                 "strobe_blur",
                 description="How much to blur the strobes",
-                default=2.0,
+                default=3.5,
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
             vol.Optional(
                 "bg_bright",
                 description="How bright the melt bg should be",
-                default=0.8,
+                default=0.4,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Optional(
+                "strobe_threshold",
+                description="Cutoff for quiet sounds. Higher -> only loud sounds are detected",
+                default=0.75,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Optional(
+                "strobe_rate",
+                description="higher numbers -> more strobes",
+                default=0.75,
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         }
     )
 
     def on_activate(self, pixel_count):
         self.hl = pixel_count
-        self.c1 = np.linspace(0, 1, pixel_count)
+        self.h = np.linspace(0, 1, pixel_count)
 
         self.timestep = 0
         self.last_time = time.time_ns()
@@ -68,58 +81,98 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
 
     def config_updated(self, config):
         self._lows_power = 0
+        self._last_lows_power = 0
         self._lows_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
+        self._direction = 1.0
+
+        self._mids_intensity = 0
 
         self.bg_bright = self._config["bg_bright"]
 
+        self.strobe_cutoff = self._config["strobe_threshold"] / 10.0
         self.strobe_width = self._config["strobe_width"]
         self.last_strobe_time = 0
-        self.strobe_wait_time = 0
-        self.strobe_decay_rate = 1 - self._config["strobe_decay_rate"]
+        self.strobe_wait_time = 1.0 - self._config["strobe_rate"]
+        self.strobe_decay_rate = 1.0 - self._config["strobe_decay_rate"]
         self.strobe_blur = self._config["strobe_blur"]
 
     def audio_data_updated(self, data):
+        self._last_lows_power = self._lows_power
         self._lows_power = self._lows_filter.update(data.lows_power(filtered=False))
+
+        if self._lows_power > self.strobe_cutoff and np.random.randint(0, 200) == 0:
+            self._direction *= -1.0
 
         currentTime = time.time()
 
-        if (data.onset() and currentTime - self.last_strobe_time > self.strobe_wait_time):
+        intensities = np.fromiter(
+             (i.max() ** 2 for i in self.melbank_thirds()), float
+        )
+        np.clip(intensities, 0, 1, out=intensities)
+        self._mids_intensity = intensities[1]
+        if (
+            data.onset()
+            and currentTime - self.last_strobe_time > self.strobe_wait_time
+            # and intensities[1] < self.strobe_cutoff
+            and intensities[2] > self.strobe_cutoff):
             self.onsets_queue.put(True)
             self.last_strobe_time = currentTime
 
     def render_hsv(self):
-        self.dt = time.time_ns() - self.last_time
+        now_ns = time.time_ns()
+        self.dt = now_ns - self.last_time
         self.timestep += self.dt
         self.timestep += (
             self._lows_power
             * self._config["reactivity"]
-            / self._config["speed"]
-            * 1000000000.0
+            * self._config["speed"]
+            * 500000000.0
         )
-        self.last_time = time.time_ns()
 
-        t1 = self.time(self._config["speed"] * 5, timestep=self.timestep)
-        t2 = self.time(self._config["speed"] * 6.5, timestep=self.timestep)
+        self.last_time = now_ns
 
-        self.c1[:] = np.linspace(0, 1, self.pixel_count)
-        # np.subtract(self.c1, self.hl, out=self.c1)
-        # np.abs(self.c1, out=self.c1)
-        # np.divide(self.c1, self.hl, out=self.c1)
-        np.subtract(1, self.c1, out=self.c1)
+        t1 = self.time(self._config["speed"] * 6, timestep=self.timestep)
+        # t1 = self._lows_power * self._config["reactivity"]
+        # t2 = self.time(self._config["speed"] * 6.5, timestep=self.timestep)
+        t2 = self._lows_power * self._config["reactivity"] * 0.5
 
+        self.h[:] = np.linspace(0, 1, self.pixel_count)
+        # big_sine = np.linspace(0, 4, self.pixel_count)
+        np.subtract(1, self.h, out=self.h)
+        self.array_sin(self.h)
         self.s = np.ones(self.pixel_count)
-        self.v = np.copy(self.c1)
-        np.add(self.c1, t2, out=self.c1)
+        self.v = np.copy(self.h)
+        # self.v = np.ones(self.pixel_count)
+
+        np.add(self.h, (1.0 - t2) * self._config["reactivity"] * self._config["speed"] * 5, out=self.h)
+        self.array_sin(self.h)
+        self.array_sin(self.h)
 
         self.array_sin(self.v)
-        np.add(self.v, t1, out=self.v)
+        np.add(self.v, t1 * self._direction, out=self.v)
         self.array_sin(self.v)
-        np.add(self.v, t1, out=self.v)
+        np.add(self.v, t1 * self._direction, out=self.v)
         self.array_sin(self.v)
-        np.power(self.v, 2, out=self.v)
+
+        # np.multiply(self.v, big_sine, out=self.v)
+
+        np.add(self.v, t2 * self._direction, out=self.v)
+        self.array_sin(self.v)
+        np.add(self.v, (1.0 - t1) * self._direction, out=self.v)
+        self.array_sin(self.v)
+        np.power(self.v, 4 + (self._mids_intensity / 5), out=self.v)
+
+        # np.subtract(1.0, self.v, out=self.v)
+        # _LOGGER.debug(f"v {self.v}")
+
+        # np.subtract(self.v, 1.0 - (self.bg_bright), out=self.v)
+        # np.maximum(self.v, 0.0, out=self.v)
         np.multiply(self.v, self.bg_bright, out=self.v)
 
-        self.hsv_array[:, 0] = self.c1
+        # roll_amount = (self._lows_power - self._last_lows_power) * 1000.0 * self._config["reactivity"]
+        # self.h = np.roll(self.h, int(roll_amount))
+        # _LOGGER.debug(f"roll {roll_amount}")
+        self.hsv_array[:, 0] = self.h
 
         if not self.onsets_queue.empty():
             self.onsets_queue.get()
