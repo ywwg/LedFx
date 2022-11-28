@@ -133,7 +133,7 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
             self._lows_power
             * self._config["reactivity"]
             * self._config["speed"]
-            * 100000000.0
+            * 500000000.0
         )
 
         t1 = self.time(self._config["speed"] * 20, timestep=self.timestep)
@@ -162,7 +162,7 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         # self.array_sin(self.v)
         # np.add(self.v, (1.0 - t1) * self._direction, out=self.v)
         # self.array_sin(self.v)
-        np.add(self.v, t2 * self._direction, out=self.v)
+        np.add(self.v, t2, out=self.v)
         self.array_sin(self.v)
         # np.add(self.v, (1.0 - t1) * self._direction, out=self.v)
         # self.array_sin(self.v)
