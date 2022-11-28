@@ -31,6 +31,26 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
                 default=0.5,
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0001, max=1)),
             vol.Optional(
+                "bg_bright",
+                description="How bright the melt bg should be",
+                default=0.4,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Optional(
+                "lava_width",
+                description="higher numbers -> more light",
+                default=0.5,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Optional(
+                "strobe_threshold",
+                description="Cutoff for quiet sounds. Higher -> only loud sounds are detected",
+                default=0.75,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Optional(
+                "strobe_rate",
+                description="higher numbers -> more strobes",
+                default=0.75,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+            vol.Optional(
                 "strobe_width",
                 description="Percussive strobe width, in pixels",
                 default=10,
@@ -45,26 +65,6 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
                 description="How much to blur the strobes",
                 default=3.5,
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
-            vol.Optional(
-                "bg_bright",
-                description="How bright the melt bg should be",
-                default=0.4,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
-            vol.Optional(
-                "strobe_threshold",
-                description="Cutoff for quiet sounds. Higher -> only loud sounds are detected",
-                default=0.75,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
-            vol.Optional(
-                "strobe_rate",
-                description="higher numbers -> more strobes",
-                default=0.75,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
-            vol.Optional(
-                "width",
-                description="higher numbers -> more light",
-                default=0.5,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
         }
     )
 
@@ -141,65 +141,54 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
             * 500000000.0
         ) * self._direction
 
+        # t1 is used to animate the lava in time. If the direction is reversed
+        # we'll go backwards (because the timestep counting down instead of up).
         t1 = self.time(self._config["speed"] * 20, timestep=self.timestep)
-        # t1 = self._lows_power * self._config["reactivity"]
-        # t2 = self.time(self._config["speed"] * 6.5, timestep=self.timestep)
-        t2 = self._lows_power * self._config["reactivity"] * 0.5
-        # t2 = self.time(self._lows_power * self._config["reactivity"] * 0.5 + 10, timestep=self.timestep)
+        bass_factor = self._lows_power * self._config["reactivity"] * 0.5
 
+        # Initialization: Hue is a ramp of the gradient from beginning to end,
+        # Saturation is full, and Value is a sine version of the hue ramp.
         self.h[:] = np.linspace(0, 1, self.pixel_count)
-        # big_sine = np.linspace(0, 4, self.pixel_count)
         np.subtract(1, self.h, out=self.h)
         self.array_sin(self.h)
         self.s = np.ones(self.pixel_count)
         self.v = np.copy(self.h)
-        # self.v = np.ones(self.pixel_count)
 
-        np.add(self.h, t2 * self._config["reactivity"] * self._config["speed"] * 5, out=self.h)
+        # Use the bass to roll the hue gradient, then use repeated sine
+        # calls to have the hues cycle more often.
+        np.add(self.h, bass_factor * self._config["speed"] * 5, out=self.h)
         self.array_sin(self.h)
         self.array_sin(self.h)
 
-        # Value munging
+        # Value munging: repeated sine operations introduce more separation
+        # between lava sections. Adding values offsets the sine waves.
         self.array_sin(self.v)
         np.add(self.v, t1, out=self.v)
         self.array_sin(self.v)
-        # np.add(self.v, t1, out=self.v)
-        # self.array_sin(self.v)
         np.add(self.v, (1.0 - t1), out=self.v)
         self.array_sin(self.v)
-        np.add(self.v, t2* self._direction, out=self.v)
+        np.add(self.v, bass_factor* self._direction, out=self.v)
         self.array_sin(self.v)
-        # np.add(self.v, (1.0 - t1), out=self.v)
-        # self.array_sin(self.v)
 
-        # power = 30 - (self._mids_power * 20)
-        width_factor = np.power(1 - self._config["width"], 2)
+        # The power operation effectively adjusts the amount of black between
+        # lava chunks.  We use a power() operation because the
+        width_factor = np.power(1 - self._config["lava_width"], 2)
         power = (30*width_factor - (self._mids_power * width_factor))
         np.power(self.v, power, out=self.v)
-        # self.hsv_array[:, 2] = self.v
 
-
-        # noise = np.random.normal(0.5,0.5, self.pixel_count)
-
-        # np.subtract(1.0, self.v, out=self.v)
-
-        # np.subtract(self.v, 1.0 - (self.bg_bright), out=self.v)
-        # np.maximum(self.v, 0.0, out=self.v)
+        # Dim the lava so its max brightness is below the strobes.
         np.multiply(self.v, self.bg_bright, out=self.v)
 
-        # roll_amount = (self._lows_power - self._last_lows_power) * 1000.0 * self._config["reactivity"]
-        # self.h = np.roll(self.h, int(roll_amount))
-        # _LOGGER.debug(f"roll {roll_amount}")
-
+        # Update strobe overlay array.
         if not self.onsets_queue.empty():
             self.onsets_queue.get()
             strobe_width = min(self.strobe_width, self.pixel_count)
             position = np.random.randint(self.pixel_count - strobe_width)
             self.strobe_overlay[position : position + strobe_width] = 1.0
 
-        # adjust saturation by the strength of the overlay mask
+        # Adjust saturation by the strength of the overlay mask
         np.multiply(self.s, np.subtract(1, self.strobe_overlay), out=self.s)
-        # add strobe_overlay strength to value, cap at 1.0
+        # Add strobe_overlay strength to value, cap at 1.0
         np.add(self.v, self.strobe_overlay, out=self.v)
         np.minimum(self.v, 1.0, out=self.v)
 
@@ -207,7 +196,7 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         self.hsv_array[:, 1] = self.s
         self.hsv_array[:, 2] = self.v
 
-        # blur and decay the strobe
+        # Blur and decay the strobe
         self.strobe_overlay *= self.strobe_decay_rate
         self.strobe_overlay = smooth(self.strobe_overlay, self.strobe_blur)
 
