@@ -238,7 +238,8 @@ class Effect(BaseRegistry):
     def __init__(self, ledfx, config):
         self._ledfx = ledfx
         self._config = {}
-        self.update_config(config)
+        if config is not None:
+            self.update_config(config)
         self.lock = threading.Lock()
 
     def __del__(self):

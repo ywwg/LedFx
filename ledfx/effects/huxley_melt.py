@@ -70,7 +70,6 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
     )
 
     def on_activate(self, pixel_count):
-        self.hl = pixel_count
         self.h = np.linspace(0, 1, pixel_count)
 
         self.timestep = 0
