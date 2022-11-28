@@ -80,12 +80,15 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         return super().deactivate()
 
     def config_updated(self, config):
+        # lows power seems to be on a 0-1 scale
         self._lows_power = 0
         self._last_lows_power = 0
         self._lows_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
         self._direction = 1.0
 
-        self._mids_intensity = 0
+        # intensity comes from melbank so it's not capped at 1.
+        self._mids_power = 0
+        self._mids_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
 
         self.bg_bright = self._config["bg_bright"]
 
@@ -99,6 +102,8 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
     def audio_data_updated(self, data):
         self._last_lows_power = self._lows_power
         self._lows_power = self._lows_filter.update(data.lows_power(filtered=False))
+        # self._lows_power = 0
+        # _LOGGER.debug(f"bass {self._lows_power}")
 
         if self._lows_power > self.strobe_cutoff and np.random.randint(0, 200) == 0:
             self._direction *= -1.0
@@ -109,7 +114,7 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
              (i.max() ** 2 for i in self.melbank_thirds()), float
         )
         np.clip(intensities, 0, 1, out=intensities)
-        self._mids_intensity = intensities[1]
+        self._mids_power = self._mids_filter.update(data.mids_power(filtered=True))
         if (
             data.onset()
             and currentTime - self.last_strobe_time > self.strobe_wait_time
@@ -121,17 +126,18 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
     def render_hsv(self):
         now_ns = time.time_ns()
         self.dt = now_ns - self.last_time
+        self.last_time = now_ns
+
         self.timestep += self.dt
         self.timestep += (
             self._lows_power
             * self._config["reactivity"]
             * self._config["speed"]
-            * 500000000.0
+            * 100000000.0
         )
 
-        self.last_time = now_ns
-
-        t1 = self.time(self._config["speed"] * 6, timestep=self.timestep)
+        t1 = self.time(self._config["speed"] * 20, timestep=self.timestep)
+        # _LOGGER.debug(f"t1 {t1}")
         # t1 = self._lows_power * self._config["reactivity"]
         # t2 = self.time(self._config["speed"] * 6.5, timestep=self.timestep)
         t2 = self._lows_power * self._config["reactivity"] * 0.5
@@ -144,26 +150,33 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         self.v = np.copy(self.h)
         # self.v = np.ones(self.pixel_count)
 
-        np.add(self.h, (1.0 - t2) * self._config["reactivity"] * self._config["speed"] * 5, out=self.h)
-        self.array_sin(self.h)
+        # np.add(self.h, (1.0 - t2) * self._config["reactivity"] * self._config["speed"] * 5, out=self.h)
+        # self.array_sin(self.h)
         self.array_sin(self.h)
 
+        # Value munging
         self.array_sin(self.v)
         np.add(self.v, t1 * self._direction, out=self.v)
         self.array_sin(self.v)
-        np.add(self.v, t1 * self._direction, out=self.v)
-        self.array_sin(self.v)
-
-        # np.multiply(self.v, big_sine, out=self.v)
-
+        # np.add(self.v, t1 * self._direction, out=self.v)
+        # self.array_sin(self.v)
+        # np.add(self.v, (1.0 - t1) * self._direction, out=self.v)
+        # self.array_sin(self.v)
         np.add(self.v, t2 * self._direction, out=self.v)
         self.array_sin(self.v)
-        np.add(self.v, (1.0 - t1) * self._direction, out=self.v)
-        self.array_sin(self.v)
-        np.power(self.v, 4 + (self._mids_intensity / 5), out=self.v)
+        # np.add(self.v, (1.0 - t1) * self._direction, out=self.v)
+        # self.array_sin(self.v)
+
+        # power = 30 - (self._mids_power * 20)
+        power = 5 - (self._mids_power * 5)
+        # _LOGGER.debug(f"{power}")
+        np.power(self.v, power, out=self.v)
+        # self.hsv_array[:, 2] = self.v
+
+
+        # noise = np.random.normal(0.5,0.5, self.pixel_count)
 
         # np.subtract(1.0, self.v, out=self.v)
-        # _LOGGER.debug(f"v {self.v}")
 
         # np.subtract(self.v, 1.0 - (self.bg_bright), out=self.v)
         # np.maximum(self.v, 0.0, out=self.v)
@@ -187,6 +200,7 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         np.minimum(self.v, 1.0, out=self.v)
 
         self.hsv_array[:, 1] = self.s
+        # self.hsv_array[:, 1] = np.zeros(self.pixel_count)
         self.hsv_array[:, 2] = self.v
 
         # blur and decay the strobe
