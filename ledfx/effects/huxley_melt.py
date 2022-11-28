@@ -3,6 +3,7 @@ import queue
 import time
 
 import numpy as np
+from scipy import signal
 import voluptuous as vol
 
 from ledfx.effects.audio import AudioReactiveEffect
@@ -157,8 +158,8 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         # Use the bass to roll the hue gradient, then use repeated sine
         # calls to have the hues cycle more often.
         np.add(self.h, bass_factor * self._config["speed"] * 5, out=self.h)
-        self.array_sin(self.h)
-        self.array_sin(self.h)
+        self.h = self._triangle(self.h)
+        self.h = self._triangle(self.h)
 
         # Value munging: repeated sine operations introduce more separation
         # between lava sections. Adding values offsets the sine waves.
@@ -166,9 +167,9 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         np.add(self.v, t1, out=self.v)
         self.array_sin(self.v)
         np.add(self.v, (1.0 - t1), out=self.v)
-        self.array_sin(self.v)
+        self.v = self._triangle(self.v)
         np.add(self.v, bass_factor * self._direction, out=self.v)
-        self.array_sin(self.v)
+        self.v = self._triangle(self.v)
 
         # The power operation effectively adjusts the amount of black between
         # lava chunks.  We use a power() operation because the
@@ -200,3 +201,7 @@ class HuxleyMelt(AudioReactiveEffect, HSVEffect):
         self.strobe_overlay *= self.strobe_decay_rate
         self.strobe_overlay = smooth(self.strobe_overlay, self.strobe_blur)
 
+    def _triangle(self, a):
+        a = signal.sawtooth(a * np.pi * 2, 0.5)
+        np.multiply(a, 0.5, out=a)
+        return np.add(a, 0.5)
