@@ -21,7 +21,7 @@ class Water(AudioReactiveEffect, HSVEffect):
     """
 
     NAME = "Water"
-    CATEGORY = "Atmospheric"
+    CATEGORY = "Huxley Hacks"
 
     CONFIG_SCHEMA = vol.Schema(
         {

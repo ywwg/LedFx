@@ -16,8 +16,8 @@ _LOGGER = logging.getLogger(__name__)
 
 class HuxleyMelt(AudioReactiveEffect, HSVEffect):
 
-    NAME = "Huxley Melt"
-    CATEGORY = "Atmospheric"
+    NAME = "Melt v2"
+    CATEGORY = "Huxley Hacks"
 
     CONFIG_SCHEMA = vol.Schema(
         {
