@@ -34,6 +34,11 @@ class Water(AudioReactiveEffect, HSVEffect):
     CONFIG_SCHEMA = vol.Schema(
         {
             vol.Optional(
+                "speed",
+                description="Speed",
+                default=1,
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=5)),
+            vol.Optional(
                 "vertical_shift",
                 description="Vertical Shift",
                 default=0.12,
@@ -85,8 +90,9 @@ class Water(AudioReactiveEffect, HSVEffect):
 
     def render_hsv(self):
         # Run water calculations
-        self._cur_buffer = 1 - self._cur_buffer
-        self._do_ripple(self._buffer, self._cur_buffer, 2**self._config["viscosity"])
+        for _ in range(0,self._config["speed"]):
+            self._cur_buffer = 1 - self._cur_buffer
+            self._do_ripple(self._buffer, self._cur_buffer, 2**self._config["viscosity"])
 
         # Rendering:
         shift_v = self._config["vertical_shift"]
