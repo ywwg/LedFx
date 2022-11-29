@@ -1,6 +1,4 @@
 import queue
-import time
-import sys
 
 import numpy as np
 from scipy import signal
@@ -9,13 +7,7 @@ import voluptuous as vol
 from ledfx.effects.audio import AudioReactiveEffect
 from ledfx.effects.hsv_effect import HSVEffect
 from ledfx.effects import smooth
-# from ledfx.utils import empty_queue
-
-# _LOGGER = logging.getLogger(__name__)
-
-
-np.set_printoptions(threshold=sys.maxsize)
-
+from ledfx.utils import empty_queue
 
 class Water(AudioReactiveEffect, HSVEffect):
     """A rippling water effect.
@@ -65,6 +57,12 @@ class Water(AudioReactiveEffect, HSVEffect):
         # Double buffered
         self._buffer = np.zeros((2, pixel_count))
         self._cur_buffer = 0
+        self.drops_queue = queue.Queue()
+
+    def deactivate(self):
+        empty_queue(self.drops_queue)
+        self.onsets_queue = None
+        return super().deactivate()
 
     def config_updated(self, config):
         self._lows_power = 0
@@ -79,14 +77,12 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._mids_power = self._mids_filter.update(
             (data.mids_power(filtered=False) + data.high_power(filtered=False)))
 
-        self._create_drop(self._buffer, 1, self._lows_power * self._config["bass_size"])
-        self._create_drop(self._buffer, self.pixel_count // 2, self._lows_power * self._config["bass_size"])
-        self._create_drop(self._buffer, self.pixel_count - 2, self._lows_power * self._config["bass_size"])
-        # Init new droplets, if any
+        self.drops_queue.put((1, self._lows_power * self._config["bass_size"]))
+        self.drops_queue.put((self.pixel_count // 2, self._lows_power * self._config["bass_size"]))
+        self.drops_queue.put((self.pixel_count - 2, self._lows_power * self._config["bass_size"]))
         if data.onset():
-            # XXXX this is in a different thread, we should queue these.
-            self._create_drop(self._buffer, np.random.randint(1, self.pixel_count - 2),
-                              self._mids_power * self._config["mids_size"])
+            self.drops_queue.put((np.random.randint(1, self.pixel_count - 2),
+                              self._mids_power * self._config["mids_size"]))
 
     def render_hsv(self):
         # Run water calculations
@@ -94,15 +90,22 @@ class Water(AudioReactiveEffect, HSVEffect):
             self._cur_buffer = 1 - self._cur_buffer
             self._do_ripple(self._buffer, self._cur_buffer, 2**self._config["viscosity"])
 
-        # Rendering:
+        # Create new drops if any
+        if self.drops_queue is None:
+            self.drops_queue = queue.Queue()
+        while not self.drops_queue.empty():
+            drop = self.drops_queue.get()
+            self._create_drop(self._buffer, drop[0], drop[1])
+
+        # Render
         shift_v = self._config["vertical_shift"]
         self._v = self._buffer[self._cur_buffer]
 
-        # Hues are a triangle
+        # Hues are a triangle of the raw values which makes for some nice effects.
         self.hsv_array[:, 0] = self._triangle(self._v)
 
-        # Shift the buffer up by the shift amount and then scale to fit.
-        # Values can still be out of bounds, so we clamp
+        # Shift the values buffer up by the shift amount and then scale to fit.
+        # Values can still be out of bounds, so we clamp.
         self._v = (self._v + shift_v) / (1 + shift_v)
         self.hsv_array[:, 2] = np.clip(self._v, 0.0, 1.0)
 
@@ -116,7 +119,7 @@ class Water(AudioReactiveEffect, HSVEffect):
         buf[1][position] = buf[1][position - 1] = buf[1][position + 1] = height
 
     def _do_ripple(self, buf, buf_idx, damp_factor):
-        """Apply ripple algorithm to the current buffer
+        """Apply ripple algorithm to the given buffer
 
         Arguments:
             buf: the double buffer to operate on
@@ -127,6 +130,9 @@ class Water(AudioReactiveEffect, HSVEffect):
         src = 1 if buf_idx == 0 else 0
         dest = 0 if buf_idx == 0 else 1
 
+        # The 2D version of this algorithm uses the north and south neighbors.
+        # Since we don't have that here, I dropped in the value at the current
+        # position.  This slows down the waves somewhat and still looks nice.
         for pixel in range(1, self.pixel_count - 1):
             buf[dest][pixel] = (((buf[src][pixel - 1]
                                 + buf[src][pixel + 1]
