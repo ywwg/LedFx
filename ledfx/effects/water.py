@@ -12,8 +12,8 @@ from ledfx.utils import empty_queue
 class Water(AudioReactiveEffect, HSVEffect):
     """A rippling water effect.
 
-    Bass onsets create big, wide waves starting at the 0 position.
-    Mid onsets create small waves at random points all around the range.
+    Bass, mid, and high powers create droplets evenly spaced along the
+    span.
 
     References:
         * https://mikro.naprvyraz.sk/docs/Coding/1/WATER.TXT
