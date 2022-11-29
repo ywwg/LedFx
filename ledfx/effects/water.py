@@ -79,11 +79,8 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._high_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
 
     def audio_data_updated(self, data):
-        self._last_lows_power = self._lows_power
         self._lows_power = self._lows_filter.update(data.lows_power(filtered=True))
-        self._last_mids_power = self._mids_power
         self._mids_power = self._mids_filter.update(data.mids_power(filtered=True))
-        self._last_high_power = self._high_power
         self._high_power = self._mids_filter.update(data.high_power(filtered=True))
 
         # Evenly distribute drop locations throughout the span:
