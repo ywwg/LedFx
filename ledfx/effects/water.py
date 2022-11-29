@@ -29,7 +29,7 @@ class Water(AudioReactiveEffect, HSVEffect):
                 "speed",
                 description="Speed",
                 default=1,
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=5)),
+            ): vol.All(vol.Coerce(float), vol.Range(min=1, max=3)),
             vol.Optional(
                 "vertical_shift",
                 description="Vertical Shift",
@@ -64,6 +64,9 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._cur_buffer = 0
         # Queue will contain tuples of (pixel location, water height value)
         self._drops_queue = queue.Queue()
+        # Emitter positions are (percentage of span, speed and direction)
+        self._mids_emitters = [(.25, 1.0), (.75, -1.0)]
+        self._high_emitters = [(.125, 1.5), (.375, -2.5), (.625, 2.5), (.875, -1.5)]
 
     def deactivate(self):
         empty_queue(self._drops_queue)
@@ -83,30 +86,37 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._mids_power = self._mids_filter.update(data.mids_power(filtered=True))
         self._high_power = self._mids_filter.update(data.high_power(filtered=True))
 
-        # Evenly distribute drop locations throughout the span:
-        # B    H    M    H    M    H    B    H     M    H    M     H     B
-        # 0   1/12 1/6  3/12 2/6  5/12 1/2   7/12  4/6  9/12 5/6  11/12  12/12
+        # Bass emitters stay at start, end, and middle.
         self._drops_queue.put((1, self._lows_power * self._config["bass_size"]))
         self._drops_queue.put((self.pixel_count // 2, self._lows_power * self._config["bass_size"]))
         self._drops_queue.put((self.pixel_count - 2, self._lows_power * self._config["bass_size"]))
 
-        sixths = self.pixel_count / 6
-        self._drops_queue.put((int(sixths), self._mids_power * self._config["mids_size"]))
-        self._drops_queue.put((int(2*sixths), self._mids_power * self._config["mids_size"]))
-        self._drops_queue.put((int(4*sixths), self._mids_power * self._config["mids_size"]))
-        self._drops_queue.put((int(5*sixths), self._mids_power * self._config["mids_size"]))
+        # Emit drops and move the emitter
+        for i in range(0, len(self._mids_emitters)):
+            mid_pos, mid_speed = self._mids_emitters[i]
+            pos = 1 + int(mid_pos * (self.pixel_count - 2))
+            self._drops_queue.put((pos, self._mids_power * self._config["mids_size"]))
+            mid_pos += 0.0002 * mid_speed * self._config["speed"]
+            if mid_pos < 0.0:
+                mid_pos += 1.0
+            elif mid_pos > 1.0:
+                mid_pos -= 1.0
+            self._mids_emitters[i] = (mid_pos, mid_speed)
 
-        twefths = self.pixel_count / 12
-        self._drops_queue.put((int(twefths), self._high_power * self._config["high_size"]))
-        self._drops_queue.put((int(3*twefths), self._high_power * self._config["high_size"]))
-        self._drops_queue.put((int(5*twefths), self._high_power * self._config["high_size"]))
-        self._drops_queue.put((int(7*twefths), self._high_power * self._config["high_size"]))
-        self._drops_queue.put((int(9*twefths), self._high_power * self._config["high_size"]))
-        self._drops_queue.put((int(11*twefths), self._high_power * self._config["high_size"]))
+        for i in range(0, len(self._high_emitters)):
+            high_pos, high_speed = self._high_emitters[i]
+            pos = 1 + int(high_pos * (self.pixel_count - 2))
+            self._drops_queue.put((pos, self._high_power * self._config["high_size"]))
+            high_pos += 0.0002 * high_speed * self._config["speed"]
+            if high_pos < 0.0:
+                high_pos += 1.0
+            elif high_pos > 1.0:
+                high_pos -= 1.0
+            self._high_emitters[i] = (high_pos, high_speed)
 
     def render_hsv(self):
         # Run water calculations
-        for _ in range(0,self._config["speed"]):
+        for _ in range(0, int(self._config["speed"])):
             # Flip buffers for each rendering pass.
             self._cur_buffer = 1 - self._cur_buffer
             self._do_ripple(self._buffer, self._cur_buffer, 2**self._config["viscosity"])
@@ -136,8 +146,8 @@ class Water(AudioReactiveEffect, HSVEffect):
         self.hsv_array[:, 1] = self._s
 
     def _create_drop(self, position, height):
-        self._buffer[0][position] = self._buffer[0][position - 1] = self._buffer[0][position + 1] = height
-        self._buffer[1][position] = self._buffer[1][position - 1] = self._buffer[1][position + 1] = height
+        self._buffer[self._cur_buffer][position] = self._buffer[self._cur_buffer][position - 1] = self._buffer[self._cur_buffer][position + 1] = height
+        # self._buffer[1][position] = self._buffer[1][position - 1] = self._buffer[1][position + 1] = height
 
     def _do_ripple(self, buf, buf_idx, damp_factor):
         """Apply ripple algorithm to the given buffer
