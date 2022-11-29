@@ -1,5 +1,4 @@
-# import logging
-# import queue
+import queue
 import time
 import sys
 
@@ -37,42 +36,30 @@ class Water(AudioReactiveEffect, HSVEffect):
             vol.Optional(
                 "vertical_shift",
                 description="Vertical Shift",
-                default=0.5,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+                default=0.12,
+            ): vol.All(vol.Coerce(float), vol.Range(min=-1, max=1)),
             vol.Optional(
                 "bass_size",
                 description="Size of bass ripples",
-                default=5,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=20)),
+                default=8,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=15)),
             vol.Optional(
                 "mids_size",
                 description="Size of mids ripples",
-                default=4,
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=20)),
+                default=6,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=15)),
             vol.Optional(
-                "bass_viscosity",
+                "viscosity",
                 description="Viscosity of bass ripples",
                 default=9,
-            ): vol.All(vol.Coerce(float), vol.Range(min=2, max=12)),
-            vol.Optional(
-                "mids_viscosity",
-                description="Viscosity of mid ripples",
-                default=3,
             ): vol.All(vol.Coerce(float), vol.Range(min=2, max=12)),
         }
     )
 
     def on_activate(self, pixel_count):
         # Double buffered
-        self._bass_buffer = np.zeros((2, pixel_count))
-        self._cur_bass_buffer = 0
-        # self._mids_buffer = np.zeros((2, pixel_count))
-        # self._cur_mids_buffer = 0
-
-        self._last_drop = 0
-
-        # Saturation is always 100%
-        self._s = np.ones(pixel_count)
+        self._buffer = np.zeros((2, pixel_count))
+        self._cur_buffer = 0
 
     def config_updated(self, config):
         self._lows_power = 0
@@ -87,40 +74,35 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._mids_power = self._mids_filter.update(
             (data.mids_power(filtered=False) + data.high_power(filtered=False)))
 
-        self._create_drop(self._bass_buffer, 1, self._lows_power * self._config["bass_size"])
-        self._create_drop(self._bass_buffer, self.pixel_count // 2, self._lows_power * self._config["bass_size"])
-        self._create_drop(self._bass_buffer, self.pixel_count - 2, self._lows_power * self._config["bass_size"])
+        self._create_drop(self._buffer, 1, self._lows_power * self._config["bass_size"])
+        self._create_drop(self._buffer, self.pixel_count // 2, self._lows_power * self._config["bass_size"])
+        self._create_drop(self._buffer, self.pixel_count - 2, self._lows_power * self._config["bass_size"])
         # Init new droplets, if any
         if data.onset():
             # XXXX this is in a different thread, we should queue these.
-            # if time.time() - self._last_drop > 0.5:
-            self._create_drop(self._bass_buffer, np.random.randint(1, self.pixel_count - 2),
+            self._create_drop(self._buffer, np.random.randint(1, self.pixel_count - 2),
                               self._mids_power * self._config["mids_size"])
-            # self._last_drop = time.time()
-        #     self._create_drop(self._bass_buffer, np.random.randint(self.pixel_count), 10)
 
     def render_hsv(self):
         # Run water calculations
-        self._cur_bass_buffer = 1 - self._cur_bass_buffer
-        self._do_ripple(self._bass_buffer, self._cur_bass_buffer, 2**self._config["bass_viscosity"])
+        self._cur_buffer = 1 - self._cur_buffer
+        self._do_ripple(self._buffer, self._cur_buffer, 2**self._config["viscosity"])
 
-        # self._cur_mids_buffer = 1 - self._cur_mids_buffer
-        # self._do_ripple(self._mids_buffer, self._cur_mids_buffer, 2**self._config["mids_viscosity"])
-
-        # Shift the buffer up by the shift amount and then scale to fit.
+        # Rendering:
         shift_v = self._config["vertical_shift"]
-        self._v = self._bass_buffer[self._cur_bass_buffer]# + self._mids_buffer[self._cur_mids_buffer]
+        self._v = self._buffer[self._cur_buffer]
 
+        # Hues are a triangle
         self.hsv_array[:, 0] = self._triangle(self._v)
 
+        # Shift the buffer up by the shift amount and then scale to fit.
+        # Values can still be out of bounds, so we clamp
         self._v = (self._v + shift_v) / (1 + shift_v)
-        self.hsv_array[:, 2] = np.minimum(self._v, 1.0)
+        self.hsv_array[:, 2] = np.clip(self._v, 0.0, 1.0)
 
         # Saturation starts at 1.0, and then for over-bright values (above 1),
         # reduce saturation to make it look hot.
-        self._s = np.maximum(self._v - 1.0, 0.0)
-        self._s = 1.0 - self._s
-        self._s = np.maximum(self._s, 0.0)
+        self._s = np.clip(-1 * self._v + 2.0, 0.0, 1.0)
         self.hsv_array[:, 1] = self._s
 
     def _create_drop(self, buf, position, height):
@@ -147,14 +129,7 @@ class Water(AudioReactiveEffect, HSVEffect):
                                 - buf[dest][pixel])
 
         buf[dest] = smooth(buf[dest], 1.0)
-        buf[dest] -=  buf[dest] / damp_factor
-        # Smooth and damp it.
-        # for pixel in range(1, self.pixel_count - 1):
-        #     damp = (
-        #         buf[dest][pixel - 1]
-        #         + buf[dest][pixel + 1]
-        #         + buf[dest][pixel]) / 3
-        #     buf[dest][pixel] = damp - (damp / damp_factor)
+        buf[dest] -= buf[dest] / damp_factor
 
     def _triangle(self, a):
         a = signal.sawtooth(a * np.pi * 2, 0.5)
