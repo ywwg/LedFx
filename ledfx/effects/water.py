@@ -46,21 +46,27 @@ class Water(AudioReactiveEffect, HSVEffect):
                 default=6,
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=15)),
             vol.Optional(
+                "high_size",
+                description="Size of high ripples",
+                default=3,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=15)),
+            vol.Optional(
                 "viscosity",
-                description="Viscosity of bass ripples",
-                default=9,
+                description="Viscosity of ripples",
+                default=6,
             ): vol.All(vol.Coerce(float), vol.Range(min=2, max=12)),
         }
     )
 
     def on_activate(self, pixel_count):
-        # Double buffered
+        # Double buffered rendering
         self._buffer = np.zeros((2, pixel_count))
         self._cur_buffer = 0
-        self.drops_queue = queue.Queue()
+        # Queue will contain tuples of (pixel location, water height value)
+        self._drops_queue = queue.Queue()
 
     def deactivate(self):
-        empty_queue(self.drops_queue)
+        empty_queue(self._drops_queue)
         self.onsets_queue = None
         return super().deactivate()
 
@@ -69,43 +75,61 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._lows_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
         self._mids_power = 0
         self._mids_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
+        self._high_power = 0
+        self._high_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
 
     def audio_data_updated(self, data):
         self._last_lows_power = self._lows_power
-        self._lows_power = self._lows_filter.update(data.lows_power(filtered=False))
+        self._lows_power = self._lows_filter.update(data.lows_power(filtered=True))
         self._last_mids_power = self._mids_power
-        self._mids_power = self._mids_filter.update(
-            (data.mids_power(filtered=False) + data.high_power(filtered=False)))
+        self._mids_power = self._mids_filter.update(data.mids_power(filtered=True))
+        self._last_high_power = self._high_power
+        self._high_power = self._mids_filter.update(data.high_power(filtered=True))
 
-        self.drops_queue.put((1, self._lows_power * self._config["bass_size"]))
-        self.drops_queue.put((self.pixel_count // 2, self._lows_power * self._config["bass_size"]))
-        self.drops_queue.put((self.pixel_count - 2, self._lows_power * self._config["bass_size"]))
-        if data.onset():
-            self.drops_queue.put((np.random.randint(1, self.pixel_count - 2),
-                              self._mids_power * self._config["mids_size"]))
+        # Evenly distribute drop locations throughout the span:
+        # B    H    M    H    M    H    B    H     M    H    M     H     B
+        # 0   1/12 1/6  3/12 2/6  5/12 1/2   7/12  4/6  9/12 5/6  11/12  12/12
+        self._drops_queue.put((1, self._lows_power * self._config["bass_size"]))
+        self._drops_queue.put((self.pixel_count // 2, self._lows_power * self._config["bass_size"]))
+        self._drops_queue.put((self.pixel_count - 2, self._lows_power * self._config["bass_size"]))
+
+        sixths = self.pixel_count / 6
+        self._drops_queue.put((int(sixths), self._mids_power * self._config["mids_size"]))
+        self._drops_queue.put((int(2*sixths), self._mids_power * self._config["mids_size"]))
+        self._drops_queue.put((int(4*sixths), self._mids_power * self._config["mids_size"]))
+        self._drops_queue.put((int(5*sixths), self._mids_power * self._config["mids_size"]))
+
+        twefths = self.pixel_count / 12
+        self._drops_queue.put((int(twefths), self._high_power * self._config["high_size"]))
+        self._drops_queue.put((int(3*twefths), self._high_power * self._config["high_size"]))
+        self._drops_queue.put((int(5*twefths), self._high_power * self._config["high_size"]))
+        self._drops_queue.put((int(7*twefths), self._high_power * self._config["high_size"]))
+        self._drops_queue.put((int(9*twefths), self._high_power * self._config["high_size"]))
+        self._drops_queue.put((int(11*twefths), self._high_power * self._config["high_size"]))
 
     def render_hsv(self):
         # Run water calculations
         for _ in range(0,self._config["speed"]):
+            # Flip buffers for each rendering pass.
             self._cur_buffer = 1 - self._cur_buffer
             self._do_ripple(self._buffer, self._cur_buffer, 2**self._config["viscosity"])
 
         # Create new drops if any
-        if self.drops_queue is None:
-            self.drops_queue = queue.Queue()
-        while not self.drops_queue.empty():
-            drop = self.drops_queue.get()
-            self._create_drop(self._buffer, drop[0], drop[1])
+        if self._drops_queue is None:
+            self._drops_queue = queue.Queue()
+        while not self._drops_queue.empty():
+            drop = self._drops_queue.get()
+            self._create_drop(drop[0], drop[1])
 
         # Render
-        shift_v = self._config["vertical_shift"]
-        self._v = self._buffer[self._cur_buffer]
 
         # Hues are a triangle of the raw values which makes for some nice effects.
-        self.hsv_array[:, 0] = self._triangle(self._v)
+        self.hsv_array[:, 0] = self._triangle(self._buffer[self._cur_buffer])
 
         # Shift the values buffer up by the shift amount and then scale to fit.
         # Values can still be out of bounds, so we clamp.
+        self._v = self._buffer[self._cur_buffer]
+        shift_v = self._config["vertical_shift"]
         self._v = (self._v + shift_v) / (1 + shift_v)
         self.hsv_array[:, 2] = np.clip(self._v, 0.0, 1.0)
 
@@ -114,9 +138,9 @@ class Water(AudioReactiveEffect, HSVEffect):
         self._s = np.clip(-1 * (self._v + shift_v) + 2.0, 0.0, 1.0)
         self.hsv_array[:, 1] = self._s
 
-    def _create_drop(self, buf, position, height):
-        buf[0][position] = buf[0][position - 1] = buf[0][position + 1] = height
-        buf[1][position] = buf[1][position - 1] = buf[1][position + 1] = height
+    def _create_drop(self, position, height):
+        self._buffer[0][position] = self._buffer[0][position - 1] = self._buffer[0][position + 1] = height
+        self._buffer[1][position] = self._buffer[1][position - 1] = self._buffer[1][position + 1] = height
 
     def _do_ripple(self, buf, buf_idx, damp_factor):
         """Apply ripple algorithm to the given buffer
