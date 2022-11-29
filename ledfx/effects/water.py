@@ -39,77 +39,94 @@ class Water(AudioReactiveEffect, HSVEffect):
 
     def on_activate(self, pixel_count):
         # Double buffered
-        self._buffer = np.zeros((2, pixel_count))
-        # Index into self.buffer of current data buffer.
-        self._cur_buffer = 0
-        self._draw_count = 0
-        self._draw_buf = np.zeros(pixel_count)
+        self._bass_buffer = np.zeros((2, pixel_count))
+        self._cur_bass_buffer = 0
+        self._highs_buffer = np.zeros((2, pixel_count))
+        self._cur_highs_buffer = 0
 
         self._last_drop = 0
 
         # Saturation is always 100%
         self._s = np.ones(pixel_count)
 
-        self._temp = np.zeros(pixel_count)
-
     def config_updated(self, config):
         self._lows_power = 0
         self._lows_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
+        self._mids_power = 0
+        self._mids_filter = self.create_filter(alpha_decay=0.1, alpha_rise=0.1)
 
     def audio_data_updated(self, data):
         self._last_lows_power = self._lows_power
         self._lows_power = self._lows_filter.update(data.lows_power(filtered=False))
+        self._last_mids_power = self._mids_power
+        self._mids_power = self._mids_filter.update(
+            (data.mids_power(filtered=False) + data.high_power(filtered=False))
+            )
 
+        self._create_drop(self._bass_buffer, 0, self._lows_power * 4)
+        self._create_drop(self._bass_buffer, self.pixel_count // 2, self._lows_power * 4)
+        self._create_drop(self._bass_buffer, self.pixel_count - 2, self._lows_power * 4)
         # Init new droplets, if any
-        # if data.onset():
-        if time.time() - self._last_drop > 0.5:
-            print("drop!")
-            self._last_drop = time.time()
-            self._create_drop(np.random.randint(self.pixel_count), 10)
+        if data.onset():
+            # if time.time() - self._last_drop > 0.5:
+            self._create_drop(self._highs_buffer, np.random.randint(self.pixel_count - 2),
+                              self._mids_power * 10)
+            # self._last_drop = time.time()
+        #     self._create_drop(self._bass_buffer, np.random.randint(self.pixel_count), 10)
 
     def render_hsv(self):
         # map water height to hue and value, leave saturation at 1.
-        # draw_buf = np.maximum(self._buffer[self._cur_buffer], 0.0)
+        # draw_buf = np.maximum(self._bass_buffer[self._cur_bass_buffer], 0.0)
 
         # Flip buffers
-        self._cur_buffer = 1 - self._cur_buffer
+        # self._cur_bass_buffer = 1 - self._cur_bass_buffer
 
         # Run water calculation
-        self._do_ripple()
+        self._cur_bass_buffer = 1 - self._cur_bass_buffer
+        self._do_ripple(self._bass_buffer, self._cur_bass_buffer, 2**9)
 
-        # for pixel in range(0, self.pixel_count - 1):
-        #     offset = self._buffer[self._cur_buffer][pixel] - self._buffer[self._cur_buffer][pixel+1]
-        #     self._draw_buf[pixel] = offset
+        # for _ in range(0, 2):
+        self._cur_highs_buffer = 1 - self._cur_highs_buffer
+        self._do_ripple(self._highs_buffer, self._cur_highs_buffer, 2**3)
 
-        self.hsv_array[:, 0] = np.divide(self._buffer[self._cur_buffer], 2)
+        h_bass = np.abs(self._bass_buffer[self._cur_bass_buffer])
+        h_highs = np.subtract(1.0, np.abs(self._highs_buffer[self._cur_highs_buffer]))
+        self.hsv_array[:, 0] = h_bass + h_highs
+
         self.hsv_array[:, 1] = self._s
-        # self.hsv_array[:, 2] = np.abs(self._buffer[self._cur_buffer])
-        self.hsv_array[:, 2] = self._buffer[self._cur_buffer]
+        # self.hsv_array[:, 2] = np.abs(self._bass_buffer[self._cur_bass_buffer])
+        # v_bass = np.abs(self._bass_buffer[self._cur_bass_buffer])
+        # v_highs = np.abs(self._highs_buffer[self._cur_highs_buffer])
+        v = np.abs(self._bass_buffer[self._cur_bass_buffer] + self._highs_buffer[self._cur_highs_buffer])
+        self.hsv_array[:, 2] = np.minimum(v * 2, 1.0)
 
-        # print(self._buffer[self._cur_buffer][48:53])
+    def _create_drop(self, buf, position, height):
+        buf[0][position] = buf[0][position - 1] = buf[0][position + 1] = height
+        buf[1][position] = buf[1][position - 1] = buf[1][position + 1] = height
 
-    def _create_drop(self, position, height):
-        self._buffer[0][position] = self._buffer[0][position - 1] = self._buffer[0][position + 1] = height
-        self._buffer[1][position] = self._buffer[1][position - 1] = self._buffer[1][position + 1] = height
+    def _do_ripple(self, buf, buf_idx, damp_factor):
+        """Apply ripple algorithm to the current buffer
 
-    def _do_ripple(self):
-        """Apply ripple algorithm to the current buffer"""
+        Arguments:
+            buf: the double buffer to operate on
+            buf_idx: the current destination buffer.
+            damp_factor: the viscocity of the liquid.  Higher is less viscous.
+        """
 
-        damp_factor = 2**4
-        src = 1 if self._cur_buffer == 0 else 0
-        dest = 0 if self._cur_buffer == 0 else 1
+        src = 1 if buf_idx == 0 else 0
+        dest = 0 if buf_idx == 0 else 1
 
         for pixel in range(1, self.pixel_count - 1):
-            self._buffer[dest][pixel] = (((self._buffer[src][pixel - 1]
-                                           + self._buffer[src][pixel + 1]
-                                           + self._buffer[src][pixel] * 2)
-                                          / 2)
-                                         - self._buffer[dest][pixel])
+            buf[dest][pixel] = (((buf[src][pixel - 1]
+                                + buf[src][pixel + 1]
+                                + buf[src][pixel] * 2)
+                                / 2)
+                                - buf[dest][pixel])
 
         # Smooth and damp it.
         for pixel in range(1, self.pixel_count - 1):
             damp = (
-                self._buffer[dest][pixel - 1]
-                + self._buffer[dest][pixel + 1]
-                + self._buffer[dest][pixel]) / 3
-            self._buffer[dest][pixel] = damp - (damp / damp_factor)
+                buf[dest][pixel - 1]
+                + buf[dest][pixel + 1]
+                + buf[dest][pixel]) / 3
+            buf[dest][pixel] = damp - (damp / damp_factor)
