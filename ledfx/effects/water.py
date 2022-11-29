@@ -1,5 +1,5 @@
 # import logging
-import queue
+# import queue
 import time
 import sys
 
@@ -63,13 +63,13 @@ class Water(AudioReactiveEffect, HSVEffect):
             (data.mids_power(filtered=False) + data.high_power(filtered=False))
             )
 
-        self._create_drop(self._bass_buffer, 0, self._lows_power * 4)
+        self._create_drop(self._bass_buffer, 1, self._lows_power * 4)
         self._create_drop(self._bass_buffer, self.pixel_count // 2, self._lows_power * 4)
         self._create_drop(self._bass_buffer, self.pixel_count - 2, self._lows_power * 4)
         # Init new droplets, if any
         if data.onset():
             # if time.time() - self._last_drop > 0.5:
-            self._create_drop(self._highs_buffer, np.random.randint(self.pixel_count - 2),
+            self._create_drop(self._highs_buffer, np.random.randint(1, self.pixel_count - 2),
                               self._mids_power * 10)
             # self._last_drop = time.time()
         #     self._create_drop(self._bass_buffer, np.random.randint(self.pixel_count), 10)
@@ -81,24 +81,23 @@ class Water(AudioReactiveEffect, HSVEffect):
         # Flip buffers
         # self._cur_bass_buffer = 1 - self._cur_bass_buffer
 
-        # Run water calculation
+        # Run water calculations
+
+        # XXXXX TODO: probably the reactivity param could adjust the damp factors.
         self._cur_bass_buffer = 1 - self._cur_bass_buffer
         self._do_ripple(self._bass_buffer, self._cur_bass_buffer, 2**9)
 
-        # for _ in range(0, 2):
         self._cur_highs_buffer = 1 - self._cur_highs_buffer
         self._do_ripple(self._highs_buffer, self._cur_highs_buffer, 2**3)
 
-        h_bass = np.abs(self._bass_buffer[self._cur_bass_buffer])
-        h_highs = np.subtract(1.0, np.abs(self._highs_buffer[self._cur_highs_buffer]))
-        self.hsv_array[:, 0] = h_bass + h_highs
+        h = self._bass_buffer[self._cur_bass_buffer] + 1.0 - self._highs_buffer[self._cur_highs_buffer]
+        self._triangle(h)
+        self.hsv_array[:, 0] = h
 
         self.hsv_array[:, 1] = self._s
-        # self.hsv_array[:, 2] = np.abs(self._bass_buffer[self._cur_bass_buffer])
-        # v_bass = np.abs(self._bass_buffer[self._cur_bass_buffer])
-        # v_highs = np.abs(self._highs_buffer[self._cur_highs_buffer])
+
         v = np.abs(self._bass_buffer[self._cur_bass_buffer] + self._highs_buffer[self._cur_highs_buffer])
-        self.hsv_array[:, 2] = np.minimum(v * 2, 1.0)
+        self.hsv_array[:, 2] = np.minimum(v, 1.0)
 
     def _create_drop(self, buf, position, height):
         buf[0][position] = buf[0][position - 1] = buf[0][position + 1] = height
@@ -130,3 +129,8 @@ class Water(AudioReactiveEffect, HSVEffect):
                 + buf[dest][pixel + 1]
                 + buf[dest][pixel]) / 3
             buf[dest][pixel] = damp - (damp / damp_factor)
+
+    def _triangle(self, a):
+        a = signal.sawtooth(a * np.pi * 2, 0.5)
+        np.multiply(a, 0.5, out=a)
+        return np.add(a, 0.5)
