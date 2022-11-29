@@ -34,7 +34,7 @@ class Water(AudioReactiveEffect, HSVEffect):
                 "vertical_shift",
                 description="Vertical Shift",
                 default=0.12,
-            ): vol.All(vol.Coerce(float), vol.Range(min=-1, max=1)),
+            ): vol.All(vol.Coerce(float), vol.Range(min=-0.2, max=1)),
             vol.Optional(
                 "bass_size",
                 description="Size of bass ripples",
@@ -111,7 +111,7 @@ class Water(AudioReactiveEffect, HSVEffect):
 
         # Saturation starts at 1.0, and then for over-bright values (above 1),
         # reduce saturation to make it look hot.
-        self._s = np.clip(-1 * self._v + 2.0, 0.0, 1.0)
+        self._s = np.clip(-1 * (self._v + shift_v) + 2.0, 0.0, 1.0)
         self.hsv_array[:, 1] = self._s
 
     def _create_drop(self, buf, position, height):
