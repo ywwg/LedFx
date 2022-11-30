@@ -84,7 +84,7 @@ class Water(AudioReactiveEffect, HSVEffect):
     def audio_data_updated(self, data):
         self._lows_power = self._lows_filter.update(data.lows_power(filtered=True))
         self._mids_power = self._mids_filter.update(data.mids_power(filtered=True))
-        self._high_power = self._mids_filter.update(data.high_power(filtered=True))
+        self._high_power = self._high_filter.update(data.high_power(filtered=True))
 
         # Bass emitters stay at start, end, and middle.
         self._drops_queue.put((1, self._lows_power * self._config["bass_size"]))
