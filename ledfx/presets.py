@@ -1478,4 +1478,5 @@ ledfx_presets = {
     "spectrum": {"reset": {"config": {}, "name": "Reset"}},
     "melt_and_sparkle": {"reset": {"config": {}, "name": "Reset"}},
     "water": {"reset": {"config": {}, "name": "Reset"}},
+    "spacestation": {"reset": {"config": {}, "name": "Reset"}},
 }
